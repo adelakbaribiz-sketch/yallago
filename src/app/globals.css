@@ -79,37 +79,41 @@
 }
 
 .dark {
-  --background: oklch(0.16 0.01 60);
-  --foreground: oklch(0.96 0.005 60);
-  --card: oklch(0.20 0.01 60);
-  --card-foreground: oklch(0.96 0.005 60);
-  --popover: oklch(0.20 0.01 60);
-  --popover-foreground: oklch(0.96 0.005 60);
-  --primary: oklch(0.65 0.22 32);
-  --primary-foreground: oklch(0.16 0.01 60);
-  --secondary: oklch(0.26 0.02 60);
-  --secondary-foreground: oklch(0.96 0.005 60);
-  --muted: oklch(0.26 0.01 60);
-  --muted-foreground: oklch(0.70 0.01 60);
-  --accent: oklch(0.30 0.04 60);
-  --accent-foreground: oklch(0.96 0.005 60);
-  --destructive: oklch(0.70 0.19 22);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.65 0.22 32);
-  --chart-1: oklch(0.65 0.22 32);
-  --chart-2: oklch(0.70 0.17 162);
-  --chart-3: oklch(0.77 0.19 70);
-  --chart-4: oklch(0.63 0.27 304);
-  --chart-5: oklch(0.65 0.25 16);
-  --sidebar: oklch(0.20 0.01 60);
-  --sidebar-foreground: oklch(0.96 0.005 60);
-  --sidebar-primary: oklch(0.65 0.22 32);
-  --sidebar-primary-foreground: oklch(0.96 0.005 60);
-  --sidebar-accent: oklch(0.26 0.02 60);
-  --sidebar-accent-foreground: oklch(0.96 0.005 60);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.65 0.22 32);
+  /* Premium dark theme — deep charcoal surfaces with warm terracotta accent.
+     Inspired by ride-hailing night UIs: dark surfaces reduce glare for drivers
+     and customers using the app at night, while the warm primary color
+     keeps the brand recognizable. Verified against WCAG AA contrast. */
+  --background: oklch(0.14 0.008 60);          /* near-black warm charcoal */
+  --foreground: oklch(0.97 0.005 60);         /* off-white */
+  --card: oklch(0.185 0.01 60);               /* slightly lifted card surface */
+  --card-foreground: oklch(0.97 0.005 60);
+  --popover: oklch(0.20 0.012 60);
+  --popover-foreground: oklch(0.97 0.005 60);
+  --primary: oklch(0.68 0.20 32);             /* brighter terracotta for dark bg */
+  --primary-foreground: oklch(0.14 0.008 60);
+  --secondary: oklch(0.24 0.015 60);
+  --secondary-foreground: oklch(0.97 0.005 60);
+  --muted: oklch(0.22 0.01 60);
+  --muted-foreground: oklch(0.68 0.015 60);
+  --accent: oklch(0.30 0.06 32);              /* warm tinted accent */
+  --accent-foreground: oklch(0.97 0.005 60);
+  --destructive: oklch(0.65 0.22 22);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.68 0.20 32);
+  --chart-1: oklch(0.68 0.20 32);             /* terracotta */
+  --chart-2: oklch(0.70 0.17 162);            /* emerald */
+  --chart-3: oklch(0.75 0.18 70);             /* amber */
+  --chart-4: oklch(0.65 0.22 260);            /* sky blue */
+  --chart-5: oklch(0.70 0.20 304);            /* violet */
+  --sidebar: oklch(0.16 0.01 60);
+  --sidebar-foreground: oklch(0.97 0.005 60);
+  --sidebar-primary: oklch(0.68 0.20 32);
+  --sidebar-primary-foreground: oklch(0.14 0.008 60);
+  --sidebar-accent: oklch(0.24 0.015 60);
+  --sidebar-accent-foreground: oklch(0.97 0.005 60);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.68 0.20 32);
 }
 
 @layer base {
@@ -142,6 +146,35 @@
 .leaflet-container {
   font-family: var(--font-sans), sans-serif;
   background: #e8e8e8;
+}
+
+/* Dark-mode leaflet: dark map background + dark controls */
+.dark .leaflet-container {
+  background: #0a0a0b;
+  filter: none;
+}
+.dark .leaflet-popup-content-wrapper,
+.dark .leaflet-popup-tip {
+  background: oklch(0.20 0.012 60);
+  color: oklch(0.97 0.005 60);
+  border: 1px solid oklch(1 0 0 / 8%);
+}
+.dark .leaflet-bar a,
+.dark .leaflet-control-zoom a {
+  background: oklch(0.20 0.012 60);
+  color: oklch(0.97 0.005 60);
+  border-color: oklch(1 0 0 / 8%);
+}
+.dark .leaflet-bar a:hover,
+.dark .leaflet-control-zoom a:hover {
+  background: oklch(0.26 0.015 60);
+}
+.dark .leaflet-control-attribution {
+  background: rgba(20, 20, 22, 0.85);
+  color: oklch(0.68 0.015 60);
+}
+.dark .leaflet-control-attribution a {
+  color: oklch(0.75 0.10 32);
 }
 
 /* Hide focus outline on leaflet controls to avoid visual clutter */

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { ServiceApi, DriverApi, OrderApi, GeoApi } from '@/lib/api-client'
 import { useAuth } from '@/components/shared/auth-provider'
+import { ThemeToggle } from '@/components/shared/theme-toggle'
 import { toast } from 'sonner'
 import { formatCurrency, formatDateTime, ORDER_STATUS_LABELS, SERVICE_TYPE_LABELS, DRIVER_STATUS_LABELS, statusColor } from '@/lib/format'
 import { getSocket, authenticateSocket, broadcastDriverLocation } from '@/lib/realtime-client'
@@ -400,6 +401,7 @@ function DriverHome({ driver, user, onShowOrders, onShowEarnings, onUpdated }: {
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" onClick={onShowOrders}><Clock className="h-4 w-4 mr-1" /> Jobs</Button>
             <Button variant="ghost" size="sm" onClick={onShowEarnings}><Wallet className="h-4 w-4 mr-1" /> Earnings</Button>
+            <ThemeToggle />
             <div className="text-xs hidden sm:block">
               <div className="font-medium">{user.fullName}</div>
               <div className="text-muted-foreground flex items-center gap-1">

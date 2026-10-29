@@ -10,6 +10,7 @@ import { AuthApi } from '@/lib/api-client'
 import { useAuth } from './auth-provider'
 import { toast } from 'sonner'
 import { Car, Bike, Truck, ShieldCheck } from 'lucide-react'
+import { ThemeToggle } from './theme-toggle'
 
 export function AuthScreen() {
   const { refresh } = useAuth()
@@ -86,7 +87,10 @@ export function AuthScreen() {
         </div>
 
         {/* Auth form panel */}
-        <div className="flex items-center justify-center p-6 lg:p-12">
+        <div className="relative flex items-center justify-center p-6 lg:p-12">
+          <div className="absolute top-4 right-4">
+            <ThemeToggle />
+          </div>
           <Card className="w-full max-w-md">
             <CardHeader className="space-y-1">
               <div className="flex items-center gap-2 mb-2 lg:hidden">

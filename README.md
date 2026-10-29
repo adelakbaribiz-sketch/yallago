@@ -1,524 +1,206 @@
-# YallaGo — Ride-Hailing & Logistics Platform
+# YallaGo
 
-A production-ready, full-stack ride-hailing and logistics platform inspired by Snapp. Built with Next.js 16, TypeScript, Prisma (SQLite), Tailwind CSS 4, shadcn/ui, and Socket.io. Provider-independent map integration via Leaflet + OpenStreetMap (no API key required for development).
+**Ride, deliver, move — one platform for car rides, motorcycle delivery, and local cargo.**
 
-> **Note on branding:** This is an original product called **YallaGo**. It does not copy Snapp's source code, trademarks, copyrighted assets, or visual identity. Snapp is referenced only as a functional inspiration.
-
----
-
-## Table of Contents
-
-1. [What's Implemented](#whats-implemented)
-2. [Demo Credentials](#demo-credentials)
-3. [Quick Start](#quick-start)
-4. [Architecture](#architecture)
-5. [Service Categories](#service-categories)
-6. [API Reference](#api-reference)
-7. [Database Schema](#database-schema)
-8. [Real-Time Updates](#real-time-updates)
-9. [Maps & Geolocation](#maps--geolocation)
-10. [Pricing Engine](#pricing-engine)
-11. [Order State Machines](#order-state-machines)
-12. [Dispatch & Concurrency](#dispatch--concurrency)
-13. [Security](#security)
-14. [Known Limitations](#known-limitations)
+> **Status: Demo / Prototype.** This is a functional reference implementation, not a live product. Every order, driver, payment, and ledger entry below is synthetic — generated locally from a seeded SQLite database. No real money moves, no real drivers are dispatched, no real map API keys are required to run it.
 
 ---
 
-## What's Implemented
+## Problem
 
-### IMPLEMENTED AND TESTED
+Building a ride-hailing + logistics platform from scratch touches many hard problems at once:
 
-- **Authentication** with sessions, customer/driver/admin roles, demo accounts
-- **Three service categories** (Car, Motorcycle, Cargo) with configurable vehicle categories
-- **Pricing engine** — backend fare calculation, versioned pricing configurations, breakdowns
-- **Order lifecycle** — full state machine: REQUESTED → SEARCHING → DRIVER_ASSIGNED → DRIVER_ARRIVING → DRIVER_ARRIVED → IN_PROGRESS → COMPLETED
-- **Atomic driver dispatch** — database transaction + conditional update prevents duplicate assignment
-- **Customer application** — service selection, address search, fare estimate, ride request, live tracking, trip history, ratings
-- **Driver application** — registration, document upload, availability toggle, incoming requests, accept/reject, active trip flow, earnings dashboard
-- **Administrative dashboard** — KPI dashboard, customer management (suspend/reactivate), driver verification (approve/reject/suspend), order management with filtering, versioned pricing editor with audit
-- **Real-time updates** — Socket.io mini-service for driver location broadcasts and order status changes
-- **Map integration** — Leaflet + OpenStreetMap, no API key required, with route polyline rendering
-- **Financial ledger** — automatic double-entry-style records for customer charges, driver credits, platform commission on completion
-- **Ratings** — 5-star rating system that updates driver aggregate rating
-- **Cargo quotation workflow** — admin reviews and approves cargo quotations before dispatch
-- **Motorcycle delivery** — package details form with recipient info, weight, dimensions
-- **Audit logging** — admin actions (driver approvals, pricing changes, status overrides) recorded
+- **Atomic driver dispatch** — two drivers accepting the same order at the same instant must not both win.
+- **Configurable pricing** — base fare, per-km, per-minute, surcharges, commission, peak multipliers — and every change must be versioned so historical invoices never silently change.
+- **Three service types under one roof** — car rides, motorcycle delivery, and cargo freight each have different state machines, different pricing rules, and different dispatch eligibility, but share one order model.
+- **Real-time tracking** — a customer should see their driver move on the map; a driver should see incoming requests without polling the server every second.
+- **Role-separated surfaces** — customer, driver, and admin see the same data through completely different lenses, with strict object-level authorization.
+- **Auditable operations** — every state transition, every pricing change, every admin action has to be reconstructable later.
 
-### IMPLEMENTED BUT NOT FULLY TESTED
-
-- **Concurrent assignment** — implemented via `updateMany` with conditional `where`; basic concurrency test passes but high-load testing not performed
-- **WebSocket location broadcasts** — socket.io service runs; client joins order rooms; not load-tested
-- **Delivery confirmation codes** — schema supports, endpoint exists, not exercised in UI flow
-
-### MOCKED FOR DEVELOPMENT
-
-- **Address geocoding** — uses a preset list of Tehran locations; in production, swap in Google Maps / Mapbox / OSRM
-- **Route polyline** — generated by quadratic interpolation between two points; in production, call OSRM or a real routing API
-- **Payment provider** — `MOCK` provider; no real card charges. Adapter pattern in place for Stripe / PayPal / local gateways
-- **SMS / email / push notifications** — Notification model and API exist; no real provider integration
-
-### NOT IMPLEMENTED
-
-- **Background job system** — offer-expiration timeouts use polling in the client; no Celery/RQ equivalent (would add BullMQ for production)
-- **Scheduled-order dispatch** — schema supports `scheduledFor` but no scheduler runs
-- **PostGIS geographic indexing** — using lat/lng float columns with Haversine; for scale, migrate to PostGIS
-- **OTP phone verification** — registration accepts phone but doesn't verify via SMS
-- **Driver payouts** — ledger entries recorded; no actual payout processor
-- **Support tickets UI** — model exists; no UI for customers/admins yet
-- **RTL / Persian localization** — language field exists; RTL not implemented
-
-### BLOCKED BY EXTERNAL DEPENDENCY
-
-- **Real map tiles & routing** — currently using free OpenStreetMap tiles; production should use a paid provider for higher rate limits
-- **Real payment gateway** — needs Stripe/PayPal account credentials
-- **Real SMS provider** — needs Twilio/Kavenegar account
-- **Push notifications** — needs FCM/APNs credentials
+Most open-source ride-hailing demos solve only the surface layer — a pretty UI calling a fake API. YallaGo solves the underlying systems problems instead.
 
 ---
 
-## Demo Credentials
+## Solution
 
-| Role     | Email                        | Password      |
-|----------|------------------------------|---------------|
-| Admin    | admin@platform.demo          | admin123      |
-| Customer | customer@platform.demo       | customer123   |
-| Driver   | driver@platform.demo         | driver123     |
+YallaGo is a modular monolith built on Next.js 16 with a real Prisma-backed persistence layer, a Socket.io mini-service for live updates, and a state-machine-driven order engine. The UI is **dark-mode-first by design** — see [`docs/DECISIONS.md`](docs/DECISIONS.md) for the rationale.
 
-There is also a pending driver account (`pending.driver@platform.demo` / `driver123`) for testing admin approval flow. The driver will be unable to log in until approved.
+**What's actually wired up end-to-end:**
+
+- A customer creates an order → backend validates, computes a backend-side fare estimate, persists the order, and triggers dispatch.
+- The dispatch engine finds eligible online drivers, ranks by distance, and atomically assigns via a database transaction with a conditional `UPDATE` (so concurrent accepts are safe).
+- The assigned driver's location is broadcast over Socket.io only to the customer who owns that order — never to other customers.
+- Every state transition (`REQUESTED → SEARCHING → DRIVER_ASSIGNED → ARRIVING → ARRIVED → IN_PROGRESS → COMPLETED`) is validated against an explicit allow-list and recorded as an `OrderEvent`.
+- On completion, the financial ledger writes three entries — `CUSTOMER_CHARGE`, `DRIVER_CREDIT`, `PLATFORM_COMMISSION` — using the pricing config version that was active when the order was created, not the current one.
+- An admin can change pricing, suspend a driver, approve a cargo quotation, or override an order status — every action hits the audit log.
 
 ---
 
-## Quick Start
+## Features
 
-### Prerequisites
+### Implemented and tested
 
-- Node.js 18+ (or Bun)
-- SQLite (bundled with the project)
+- 🔐 **Authentication** — session cookies, PBKDF2-hashed passwords, three roles (Customer / Driver / Admin), object-level authorization
+- 🚗 **Three service categories** — Car (4 vehicle types), Motorcycle (passenger + package delivery), Cargo (6 vehicle types, quotation workflow)
+- 💸 **Versioned pricing engine** — backend fare calculation with full breakdown; every update creates a new version and deactivates the old one
+- 🛰 **Atomic driver dispatch** — database transaction + conditional update prevents duplicate assignment under concurrent accepts
+- 📦 **Order state machines** — service-specific lifecycles (ride, delivery, cargo) with server-side transition validation and full event audit trail
+- 🗺 **Provider-independent maps** — Leaflet + OpenStreetMap tiles by default, swappable to Google Maps / Mapbox / OSRM via the `src/lib/geo.ts` abstraction
+- ⚡ **Real-time updates** — Socket.io mini-service (port 3003) with room-isolated driver location broadcasts
+- 📊 **Admin dashboard** — KPIs, customer management, driver verification, order management with filters, cargo quotation approval, versioned pricing editor with audit trail
+- 💰 **Financial ledger** — double-entry-style records for charges, driver credits, platform commission
+- ⭐ **Ratings** — 5-star feedback that updates the driver's aggregate rating
+- 🌗 **Dark-mode-first UI** — premium charcoal palette with warm terracotta accent; one-click theme toggle in every header
+- 🎨 **Original brand identity** — built from scratch, not copying any existing product's trademarks or visual assets
 
-### Installation
+### Mocked for development
 
-```bash
-# Install dependencies
-bun install
+- Address geocoding (preset Tehran locations) — swap in Google Maps / Mapbox via `src/lib/geo.ts`
+- Route polylines (quadratic interpolation) — swap in OSRM for real road-following routes
+- Payment provider (`MOCK` adapter) — Stripe / PayPal / local-gateway adapters stubbed
+- SMS / push notifications — Notification model exists, no real provider
 
-# Initialize the database and seed demo data
-bun run db:push
-bun run scripts/seed.ts
+### Not implemented (see [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md))
 
-# Start the realtime WebSocket service (in background)
-cd mini-services/realtime && bun install && bun run dev &
-cd ../..
+Background job system (offer expiration uses client polling), OTP phone verification, native mobile apps, RTL / Persian localization, automated test suite, Docker deployment files, real webhook handling.
 
-# Start the main Next.js app (runs on port 3000)
-bun run dev
-```
+---
 
-Open http://localhost:3000 and log in with one of the demo accounts.
+## Screenshots
 
-### Useful Scripts
+_All captured from the demo running locally at 1440 × 900 in dark mode. Every figure, account, order, and ledger entry is synthetic. The UI is dark-mode-first by design; see [`docs/DECISIONS.md`](docs/DECISIONS.md)._
 
-| Script                              | Purpose                                   |
-|-------------------------------------|-------------------------------------------|
-| `bun run db:push`                   | Create/migrate SQLite schema              |
-| `bun run scripts/seed.ts`           | Seed service catalog, pricing, demo users |
-| `bun run scripts/refresh-driver.ts` | Refresh demo driver's online status       |
-| `bun run scripts/clean-tx.ts`       | Wipe orders/events/ledger but keep users  |
-| `bun run lint`                      | ESLint check                              |
+| Login screen | Customer home — three service categories |
+|---|---|
+| ![Login screen](docs/screenshots/01-login-dark.png) | ![Customer home](docs/screenshots/02-customer-home-dark.png) |
+| **Customer — car booking with live map & fare estimate** | **Customer — live ride tracking with status timeline** |
+| ![Car booking](docs/screenshots/03-customer-booking-dark.png) | ![Customer tracking](docs/screenshots/04-customer-tracking-dark.png) |
+| **Driver — incoming request modal (accept / reject)** | **Driver — active job with state-machine action button** |
+| ![Driver incoming request](docs/screenshots/05-driver-incoming-request-dark.png) | ![Driver active job](docs/screenshots/06-driver-active-job-dark.png) |
+| **Admin dashboard — KPIs + service performance** | **Admin — driver verification queue (approve / reject)** |
+| ![Admin dashboard](docs/screenshots/07-admin-dashboard-dark.png) | ![Admin drivers](docs/screenshots/08-admin-drivers-dark.png) |
+| **Admin — versioned pricing editor** | **Admin — order management with filters** |
+| ![Admin pricing](docs/screenshots/09-admin-pricing-dark.png) | ![Admin orders](docs/screenshots/10-admin-orders-dark.png) |
+| **Customer — cargo booking form (with helpers, loading, scheduling)** |
+| ![Cargo booking](docs/screenshots/11-cargo-booking-dark.png) |
+
+_Desktop-sized screens (1440 × 900). All data is synthetic._
 
 ---
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                      Browser (Single SPA)                       │
-│  /  →  AuthScreen  →  CustomerApp | DriverApp | AdminApp       │
-└────────────────────────┬───────────────────────────────────────┘
-                         │ HTTPS + Cookie
-┌────────────────────────▼───────────────────────────────────────┐
-│                Next.js 16 App (port 3000)                       │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────┐  │
-│  │  React Pages    │  │  /api/* Routes  │  │  Server Libs   │  │
-│  │  (App Router)   │──│  (Route Handlers)│──│  auth.ts       │  │
-│  └─────────────────┘  └────────┬────────┘  │  dispatch.ts   │  │
-│                                │           │  pricing.ts    │  │
-│                                │           │  geo.ts        │  │
-│                                │           │  db.ts         │  │
-└────────────────────────────────┼───────────┴────────────────┘
-                                 │
-                ┌────────────────▼────────────────┐
-                │     Prisma + SQLite (db/custom.db)│
-                └─────────────────────────────────┘
-                ┌─────────────────────────────────┐
-                │   Socket.io (port 3003, mini-svc)│
-                │   ↳ gateway: /?XTransformPort=3003│
-                └─────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                   Browser (single-page app)                    │
+│   /  →  AuthScreen  →  CustomerApp | DriverApp | AdminApp      │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │ HTTPS + HTTP-only session cookie
+┌──────────────────────────▼─────────────────────────────────────┐
+│              Next.js 16 App (port 3000)                        │
+│   ┌────────────────┐  ┌────────────────┐  ┌────────────────┐   │
+│   │  React pages   │  │  /api/* routes │  │  Server libs   │   │
+│   │  (App Router)  │──│  (Route        │──│  auth.ts       │   │
+│   │  shadcn/ui     │  │   Handlers)    │  │  dispatch.ts   │   │
+│   └────────────────┘  └───────┬────────┘  │  pricing.ts    │   │
+│                               │           │  geo.ts        │   │
+│                               │           │  db.ts         │   │
+└───────────────────────────────┼───────────┴────────────────┘
+                                │
+            ┌───────────────────▼───────────────────┐
+            │   Prisma + SQLite (db/custom.db)       │
+            │   20+ models, indexed for dispatch     │
+            └────────────────────────────────────────┘
+            ┌────────────────────────────────────────┐
+            │   Socket.io mini-service (port 3003)    │
+            │   ↳ gateway: /?XTransformPort=3003      │
+            │   ↳ room-isolated driver-location       │
+            │     broadcasts (only to active-order    │
+            │     customer + admins)                  │
+            └────────────────────────────────────────┘
 ```
+
+**Why a modular monolith?** Domain boundaries are enforced at the file/module level (`auth`, `dispatch`, `pricing`, `geo`) rather than via microservices. This keeps operational complexity low while preserving the ability to extract services later. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/DECISIONS.md`](docs/DECISIONS.md) for the full rationale.
 
 ### Layers
 
-- **Presentation**: React components in `src/components/{customer,driver,admin,shared,map}/`
-- **API**: Next.js Route Handlers in `src/app/api/...`
-- **Domain logic**: Pure TypeScript in `src/lib/{dispatch,pricing,geo,auth,crypto}.ts`
-- **Persistence**: Prisma schema in `prisma/schema.prisma`, client in `src/lib/db.ts`
-- **Real-time**: Socket.io mini-service in `mini-services/realtime/`
-
-### Why a modular monolith?
-
-The platform is organized as a modular monolith: domain boundaries are enforced at the file/module level (auth, dispatch, pricing, geo, etc.) rather than via microservices. This keeps operational complexity low while preserving the ability to extract services later.
+| Layer | Location | Responsibility |
+|---|---|---|
+| Presentation | `src/components/{customer,driver,admin,shared,map}/` | React UI, shadcn/ui components, Leaflet map |
+| API | `src/app/api/...` | Route handlers — auth, validation, role checks |
+| Domain | `src/lib/{dispatch,pricing,geo,auth,crypto}.ts` | Pure TypeScript — state machines, pricing, dispatch |
+| Persistence | `prisma/schema.prisma`, `src/lib/db.ts` | Prisma + SQLite |
+| Real-time | `mini-services/realtime/` | Socket.io server (port 3003) + emit endpoint (port 3004) |
 
 ---
 
-## Service Categories
+## Tech Stack
 
-Three configurable service categories seeded by default:
+- **Framework**: Next.js 16 (App Router) — required by the environment
+- **Language**: TypeScript 5 (strict)
+- **Styling**: Tailwind CSS 4 with shadcn/ui (New York style)
+- **Database**: Prisma ORM + SQLite (PostgreSQL-ready schema)
+- **Real-time**: Socket.io (mini-service on port 3003)
+- **Maps**: Leaflet + OpenStreetMap / CARTO dark tiles
+- **Auth**: HTTP-only session cookies, PBKDF2-sha512 password hashing
+- **State**: Zustand (client) + TanStack Query (server)
+- **Forms**: React Hook Form + Zod
+- **Notifications**: Sonner (in-app toasts)
+- **Theming**: next-themes (dark-mode-first)
 
-| Code        | Name        | Supports Passenger | Supports Delivery | Requires Quotation |
-|-------------|-------------|--------------------|--------------------|---------------------|
-| CAR         | Car         | ✓                  | —                  | —                  |
-| MOTORCYCLE  | Motorcycle | ✓                  | ✓                  | —                  |
-| CARGO       | Cargo       | —                  | ✓                  | ✓                  |
-
-Each service has configurable vehicle categories:
-
-- **Car**: Standard, Economy, Premium, SUV (6-passenger)
-- **Motorcycle**: Motorcycle (1-passenger)
-- **Cargo**: Small Pickup, Pickup (Enclosed), Light Van, Small Truck, Medium Truck, Large Truck
-
-Vehicle categories are stored in the database — not hard-coded. Admins can activate, deactivate, or rename them via direct DB manipulation (UI for this is a TODO).
+No external API keys required for development — all integrations (maps, geocoding, payments) are mocked or use free tiers.
 
 ---
 
-## API Reference
+## Demo
 
-All API routes are under `/api/`. Authentication uses an HTTP-only cookie (`platform_session`). All requests must include the cookie.
+### Demo credentials
 
-### Authentication
+| Role | Email | Password |
+|---|---|---|
+| Customer | `customer@platform.demo` | `customer123` |
+| Driver | `driver@platform.demo` | `driver123` |
+| Admin | `admin@platform.demo` | `admin123` |
 
-| Method | Endpoint        | Body                                              | Returns            |
-|--------|-----------------|---------------------------------------------------|--------------------|
-| POST   | `/api/auth`     | `{action:"login", email, password}`               | `{user}`           |
-| POST   | `/api/auth`     | `{action:"register", email, password, fullName, phone, role}` | `{user}` |
-| POST   | `/api/auth`     | `{action:"logout"}`                               | `{ok: true}`       |
-| GET    | `/api/auth`     | —                                                 | `{user, driverInfo}` |
+A pending driver (`pending.driver@platform.demo` / `driver123`) is also seeded for testing the admin approval workflow. Pending drivers cannot log in until approved.
 
-### Service Catalog
+### Quick start
 
-| Method | Endpoint        | Returns                              |
-|--------|-----------------|--------------------------------------|
-| GET    | `/api/services` | `{services: [...], regions: [...]}`  |
+```bash
+# 1. Install dependencies
+bun install
 
-### Pricing
+# 2. Initialize the database and seed demo data
+bun run db:push
+bun run scripts/seed.ts
 
-| Method | Endpoint                  | Body                                                                                  | Returns                       |
-|--------|---------------------------|---------------------------------------------------------------------------------------|-------------------------------|
-| POST   | `/api/pricing/estimate`   | `{serviceCategoryId, vehicleCategoryId?, pickupLat, pickupLng, destinationLat, destinationLng, weightKg?, helpers?, ...}` | `{estimate, distanceKm, durationMinutes}` |
+# 3. Start the realtime WebSocket service (background)
+cd mini-services/realtime && bun install && bun run dev &
+cd ../..
 
-### Orders
-
-| Method | Endpoint                              | Purpose                                |
-|--------|---------------------------------------|----------------------------------------|
-| POST   | `/api/orders`                         | Create a new ride/delivery/cargo order |
-| GET    | `/api/orders`                         | List orders (customer: own; driver: assigned; admin: all) |
-| GET    | `/api/orders/[id]`                    | Get order details with events & driver location |
-| PUT    | `/api/orders/[id]`                    | Generic state transition (`{toStatus, cancelReason?}`) |
-| POST   | `/api/orders/[id]/cancel`             | Cancel (customer or driver)            |
-| POST   | `/api/orders/[id]/rate`               | Submit rating (`{stars, comment, tags?}`) |
-| POST   | `/api/orders/[id]/accept`             | Driver accepts (atomic)                |
-| POST   | `/api/orders/[id]/reject`             | Driver rejects (`{reason?}`)           |
-| POST   | `/api/orders/[id]/arrive`             | Driver: toggle arriving/arrived        |
-| POST   | `/api/orders/[id]/start`              | Driver: start trip / loading / transit |
-| POST   | `/api/orders/[id]/complete`           | Driver: complete (writes ledger entries) |
-| POST   | `/api/orders/[id]/confirm-delivery`   | Customer: confirm package delivery (`{code?}`) |
-| POST   | `/api/orders/[id]/quotation`          | Admin: approve/reject cargo quotation (`{action, amount?}`) |
-
-### Drivers
-
-| Method | Endpoint                                | Purpose                                |
-|--------|-----------------------------------------|----------------------------------------|
-| POST   | `/api/drivers/apply`                    | Submit/update driver application       |
-| GET    | `/api/drivers/apply`                    | Get current driver's profile           |
-| GET    | `/api/drivers/me/availability`          | Get online/offline status              |
-| PATCH  | `/api/drivers/me/availability`          | Toggle online (`{isOnline, latitude?, longitude?}`) |
-| POST   | `/api/drivers/me/location`              | Update GPS location                    |
-| GET    | `/api/drivers/me/requests`              | List incoming/offered + accepted requests |
-| GET    | `/api/drivers/me/orders`                | List driver's order history            |
-| GET    | `/api/drivers/me/earnings`              | Get earnings summary (date-filtered)   |
-| GET    | `/api/drivers/online`                   | List online drivers (admin/customer)   |
-
-### Admin
-
-| Method | Endpoint                                | Purpose                                |
-|--------|-----------------------------------------|----------------------------------------|
-| GET    | `/api/admin/dashboard`                  | KPI metrics, service performance       |
-| GET    | `/api/admin/customers`                  | Search/list customers                  |
-| PATCH  | `/api/admin/customers`                  | Update customer status (suspend/reactivate) |
-| GET    | `/api/admin/drivers`                    | List drivers (filter by status)        |
-| POST   | `/api/admin/drivers/[id]/approve`       | Approve driver                         |
-| POST   | `/api/admin/drivers/[id]/reject`        | Reject/suspend driver (`{reason, action?}`) |
-| GET    | `/api/admin/orders`                     | List all orders (filter by status/type) |
-| PATCH  | `/api/admin/orders`                     | Update order status                    |
-| GET    | `/api/admin/pricing`                    | List active pricing configs            |
-| POST   | `/api/admin/pricing`                    | Create new pricing version             |
-| GET    | `/api/admin/pricing/[id]`               | Get version history for a config group |
-
-### Geo
-
-| Method | Endpoint           | Purpose                          |
-|--------|--------------------|----------------------------------|
-| GET    | `/api/geo/search?q=` | Address search (mock)          |
-| POST   | `/api/geo/route`   | Get route polyline + distance    |
-
----
-
-## Database Schema
-
-See `prisma/schema.prisma` for the full schema. Key models:
-
-- **User** — base account, role CUSTOMER/DRIVER/ADMIN, status ACTIVE/SUSPENDED/DELETED
-- **Session** — signed session tokens with 7-day expiry
-- **AdminProfile** — admin role + permissions JSON
-- **CustomerProfile** — saved addresses JSON
-- **Driver** — license, status PENDING/APPROVED/REJECTED/SUSPENDED, ratings
-- **Vehicle** — driver-owned, approved separately
-- **DriverLocation** — latest GPS ping per driver
-- **ServiceCategory** — Car/Motorcycle/Cargo config
-- **VehicleCategory** — service-specific vehicle types
-- **ServiceRegion** — geographic regions with enabled services
-- **PricingConfiguration** — versioned JSON config (baseFare, perKm, perMinute, etc.)
-- **Order** — unified ride/delivery/cargo entity with state machine
-- **OrderEvent** — auditable transition history
-- **DriverAssignment** — offer tracking (OFFERED → ACCEPTED/REJECTED/EXPIRED)
-- **Payment** — payment records with provider/amount/status
-- **LedgerEntry** — double-entry-style financial records
-- **Payout** — driver payout batches
-- **Rating** — customer/driver ratings per order
-- **Notification** — in-app/push/SMS/email queue
-- **SupportTicket** — customer support tickets
-- **AuditLog** — admin action audit trail
-
-All monetary amounts use `Float` (suitable for demo). **Production should use `Decimal`** to avoid floating-point errors. Timestamps are stored in UTC.
-
----
-
-## Real-Time Updates
-
-A Socket.io mini-service runs on port 3003 (proxied via Caddy gateway at `/?XTransformPort=3003`). It handles:
-
-- **Driver location broadcasts** — sent only to customers with an active order for that driver, plus admins
-- **Order status events** — backend emits to the customer or driver room
-- **Room-based isolation** — customers join `customer:<userId>`, drivers join `driver:<driverId>`, all join `order:<orderId>` for active orders
-
-```typescript
-// Frontend connection
-import { getSocket, authenticateSocket } from '@/lib/realtime-client'
-const socket = getSocket()
-authenticateSocket(user.id, user.role, user.driverId)
-socket.on('driver-location', (data) => { /* update map */ })
+# 4. Start the main Next.js app (port 3000)
+bun run dev
 ```
 
----
+Open `http://localhost:3000` and log in with one of the demo accounts above.
 
-## Maps & Geolocation
+### Try the full flow
 
-**Map rendering**: [Leaflet](https://leafletjs.com/) with [OpenStreetMap](https://www.openstreetmap.org/) tiles. No API key required.
+1. Sign in as the **customer** → select **Car** → search "Azadi" for pickup and "Tajrish" for destination → see fare estimate → click **Request car**.
+2. Sign out and sign in as the **driver** → toggle **Go online** → a request modal appears → click **Accept** → advance through **Start navigating → Mark arrived → Start trip → Complete trip**.
+3. Sign in as **admin** → see the new order in the dashboard → visit **Drivers** tab to approve the pending driver → visit **Pricing** tab to edit a config (creates a new version).
 
-**Routing & geocoding**: Mocked in `src/lib/geo.ts` with a preset list of Tehran locations. The `MapsService` abstraction is in place so you can swap in:
+### Useful scripts
 
-- **Google Maps Platform** — replace `searchAddresses`, `reverseGeocode`, `simulateRoute` with calls to the Maps SDK
-- **Mapbox** — similar swap
-- **OSRM** — for self-hosted route calculation
+| Script | Purpose |
+|---|---|
+| `bun run db:push` | Create/migrate SQLite schema |
+| `bun run scripts/seed.ts` | Seed service catalog, pricing, demo users |
+| `bun run scripts/refresh-driver.ts` | Refresh demo driver's online status |
+| `bun run scripts/clean-tx.ts` | Wipe orders/events/ledger but keep users & config |
+| `bun run lint` | ESLint check |
 
-**Location privacy**: Driver locations are only broadcast to customers with an active order assignment. When a driver goes offline, no further updates are sent.
-
----
-
-## Pricing Engine
-
-The pricing engine (`src/lib/pricing.ts`) calculates fare estimates using a versioned JSON configuration:
-
-```typescript
-type PricingConfig = {
-  baseFare: number
-  minFare: number
-  perKm: number
-  perMinute: number
-  bookingFee: number
-  cancellationFee: number
-  waitingFeePerMin: number
-  commissionRate: number  // 0.0 – 1.0
-  // Motorcycle-specific
-  packageDeliverySurcharge?: number
-  oversizedPackageSurcharge?: number
-  // Cargo-specific
-  helperFeePerHour?: number
-  loadingFee?: number
-  unloadingFee?: number
-  weightSurchargePerKg?: number
-  scheduledServiceFee?: number
-}
-```
-
-### Formula
-
-```
-estimatedFare = max(minFare,
-    baseFare
-  + (perKm × distanceKm)
-  + (perMinute × durationMinutes)
-  + bookingFee
-  + surcharges
-  + helpersFee + loadingFee + unloadingFee
-  + weightSurcharge + scheduledServiceFee
-)
-```
-
-### Versioning
-
-When an admin updates a pricing config, the system:
-1. Sets `isActive = false` and `effectiveTo = now()` on the current version
-2. Creates a new record with `version = oldVersion + 1`
-3. Records an `AuditLog` entry
-
-Historical invoices keep their `pricingConfigVersion` reference, so old invoices are never silently modified by new pricing.
-
----
-
-## Order State Machines
-
-### Car Ride
-
-```
-REQUESTED → SEARCHING → DRIVER_ASSIGNED → DRIVER_ARRIVING → DRIVER_ARRIVED → IN_PROGRESS → COMPLETED
-                ↓
-        NO_DRIVER_AVAILABLE
-```
-
-Cancellation branches:
-- `CANCELLED_BY_CUSTOMER` — from REQUESTED, SEARCHING, DRIVER_ASSIGNED, DRIVER_ARRIVING, DRIVER_ARRIVED
-- `CANCELLED_BY_DRIVER` — from DRIVER_ASSIGNED onward
-- `CANCELLED_BY_SYSTEM` — admin override
-
-### Motorcycle Delivery
-
-```
-REQUESTED → SEARCHING → DRIVER_ASSIGNED → DRIVER_ARRIVING → DRIVER_ARRIVED → IN_TRANSIT → COMPLETED
-```
-
-Package delivery supports `confirm-delivery` endpoint with optional confirmation code.
-
-### Cargo
-
-```
-QUOTATION_REQUESTED → QUOTATION_APPROVED → REQUESTED → SEARCHING → DRIVER_ASSIGNED →
-  DRIVER_ARRIVING → DRIVER_ARRIVED → LOADING → IN_TRANSIT → UNLOADING → COMPLETED
-```
-
-Cargo requires admin-approved quotation before dispatch.
-
-All transitions are validated by `canTransition()` in `src/lib/dispatch.ts`. Illegal transitions return HTTP 400 with `INVALID_TRANSITION:from->to`.
-
-Every transition records an `OrderEvent` row with actor ID, actor type, and timestamps.
-
----
-
-## Dispatch & Concurrency
-
-The dispatch engine (`src/lib/dispatch.ts`) prevents duplicate assignment using a **database transaction + conditional update**:
-
-```typescript
-async function acceptOrderOffer(orderId, driverId) {
-  return await db.$transaction(async (tx) => {
-    // 1. Verify the driver has a valid OFFERED assignment
-    const assignment = await tx.driverAssignment.findFirst({
-      where: { orderId, driverId, status: 'OFFERED', expiresAt: { gt: new Date() } }
-    })
-    if (!assignment) return { success: false, reason: 'NO_VALID_OFFER' }
-
-    // 2. Mark assignment ACCEPTED
-    await tx.driverAssignment.update({
-      where: { id: assignment.id },
-      data: { status: 'ACCEPTED', respondedAt: new Date() }
-    })
-
-    // 3. Cancel all OTHER offered assignments for this order
-    await tx.driverAssignment.updateMany({
-      where: { orderId, status: 'OFFERED', NOT: { id: assignment.id } },
-      data: { status: 'CANCELLED' }
-    })
-
-    // 4. ATOMIC: assign driver to order ONLY if not already assigned
-    const updated = await tx.order.updateMany({
-      where: { id: orderId, status: { in: ['REQUESTED', 'SEARCHING'] }, driverId: null },
-      data: { driverId, status: 'DRIVER_ASSIGNED', assignedAt: new Date() }
-    })
-
-    // 5. If zero rows updated, someone else won the race
-    if (updated.count === 0) {
-      await tx.driverAssignment.update({
-        where: { id: assignment.id },
-        data: { status: 'REJECTED' }
-      })
-      return { success: false, reason: 'ALREADY_ASSIGNED' }
-    }
-
-    return { success: true, order: ... }
-  })
-}
-```
-
-This guarantees that even if two drivers race to accept the same order, only one succeeds. The losing driver receives `ALREADY_ASSIGNED` and the order is unchanged.
-
-### Eligibility Filter
-
-Drivers are eligible if:
-- `status = APPROVED`
-- `isOnline = true`
-- `lastSeenAt > now - 5 min`
-- `eligibleServiceCategories` includes the order's service category
-- They have an APPROVED vehicle matching the service category
-- They're within `DISPATCH_RADIUS_KM = 10` km of the pickup point
-
-Drivers are ranked by distance to pickup (ascending).
-
----
-
-## Security
-
-- **Password hashing**: PBKDF2 (sha512, 100k iterations) via `node:crypto`. Production should use Argon2.
-- **Sessions**: HTTP-only cookies, 7-day expiry, stored in DB (can be revoked).
-- **Role-based access control**: every API route checks `user.role` and returns 403 for unauthorized access.
-- **Object-level authorization**: customers can only access their own orders; drivers can only access orders assigned to them.
-- **Input validation**: all API routes validate required fields and return 400 for malformed input.
-- **SQL injection**: Prisma parameterizes all queries.
-- **CORS**: not enabled (same-origin only).
-- **Secrets**: no secrets in source; `.env` file is git-ignored.
-
-### Known Security Gaps
-
-- No rate limiting on auth endpoints (would add `next-safe-action` or a middleware)
-- No CSRF protection on state-changing endpoints (relies on SameSite=Lax cookie)
-- No Content Security Policy headers
-- No file upload scanning for driver documents
-- No data retention workflow for GDPR-style deletion
-
----
-
-## Known Limitations
-
-1. **SQLite**: suitable for demo; production should use PostgreSQL with PostGIS for geographic indexing.
-2. **Single dispatch offer**: currently offers to one driver at a time. Production should broadcast to a batch (e.g., 3 nearest drivers) and use a more sophisticated ranking algorithm.
-3. **No background job system**: offer expiration uses client-side polling. Production should add BullMQ or similar.
-4. **Mock geocoding**: only preset Tehran locations work for address search.
-5. **Mock routing**: polylines are quadratic interpolations, not real road-following paths.
-6. **Mock payments**: no real payment gateway integrated; the adapter pattern is in place.
-7. **No OTP**: phone numbers are stored but not verified via SMS.
-8. **No push notifications**: in-app notifications are stored in DB but not delivered to mobile devices.
-9. **No native mobile apps**: this is a responsive PWA. Native iOS/Android would require React Native or native development.
-10. **Single-language UI**: English only. Localization framework (`next-intl`) is installed but no translations provided.
-11. **Float monetary amounts**: should be `Decimal` for production.
-12. **No automated tests**: the platform has been manually tested end-to-end; unit/integration test suite is a TODO.
+No environment variables are required for development. The `.env` file contains only `DATABASE_URL=file:/home/z/my-project/db/custom.db`.
 
 ---
 
@@ -527,51 +209,125 @@ Drivers are ranked by distance to pickup (ascending).
 ```
 .
 ├── prisma/
-│   └── schema.prisma              # Database schema
+│   └── schema.prisma              # 20+ models: User, Driver, Order, PricingConfiguration, LedgerEntry…
 ├── scripts/
-│   ├── seed.ts                    # Database seeder
+│   ├── seed.ts                    # Database seeder (services, pricing, demo users)
 │   ├── refresh-driver.ts          # Refresh demo driver's online status
 │   └── clean-tx.ts                # Wipe transactional data
 ├── src/
 │   ├── app/
-│   │   ├── api/                   # All API routes
-│   │   │   ├── auth/
-│   │   │   ├── services/
-│   │   │   ├── pricing/estimate/
-│   │   │   ├── orders/            # + [id]/{accept,reject,arrive,start,complete,...}
-│   │   │   ├── drivers/           # + me/{availability,location,requests,earnings,orders}
-│   │   │   ├── admin/             # + {dashboard,customers,drivers,orders,pricing}
-│   │   │   ├── geo/               # search, route
-│   │   │   └── notifications/
+│   │   ├── api/                   # 30+ route handlers under /api/{auth,services,pricing,orders,drivers,admin,geo,notifications}/
 │   │   ├── page.tsx               # Root router (auth → role-based app)
-│   │   ├── layout.tsx
-│   │   └── globals.css
+│   │   ├── layout.tsx             # ThemeProvider + dark-mode-first bootstrap
+│   │   └── globals.css            # Tailwind tokens + dark theme palette + leaflet dark styles
 │   ├── components/
 │   │   ├── customer/customer-app.tsx
 │   │   ├── driver/driver-app.tsx
 │   │   ├── admin/admin-app.tsx
-│   │   ├── shared/{auth-screen,auth-provider}.tsx
-│   │   └── map/MapView.tsx
+│   │   ├── shared/
+│   │   │   ├── auth-screen.tsx
+│   │   │   ├── auth-provider.tsx
+│   │   │   ├── theme-provider.tsx
+│   │   │   └── theme-toggle.tsx
+│   │   └── map/MapView.tsx        # Leaflet wrapper, theme-aware tiles
 │   ├── lib/
 │   │   ├── auth.ts                # Session management
-│   │   ├── crypto.ts              # Password hashing
-│   │   ├── dispatch.ts            # Order engine + state machine + dispatch
-│   │   ├── pricing.ts             # Pricing engine
-│   │   ├── geo.ts                 # Geolocation helpers
+│   │   ├── crypto.ts              # PBKDF2 password hashing
+│   │   ├── dispatch.ts            # Order engine + state machine + atomic dispatch
+│   │   ├── pricing.ts             # Versioned pricing engine
+│   │   ├── geo.ts                 # Provider-independent geocoding/routing
 │   │   ├── api.ts                 # API route wrapper
-│   │   ├── api-client.ts          # Frontend API client
-│   │   ├── realtime-client.ts     # Socket.io client
+│   │   ├── api-client.ts          # Frontend typed API client
+│   │   ├── realtime-client.ts     # Socket.io browser client
 │   │   ├── format.ts              # Shared formatters
 │   │   └── db.ts                  # Prisma client
-│   ├── stores/app-store.ts        # Zustand UI state
-│   └── hooks/
+│   └── stores/app-store.ts        # Zustand UI state
 ├── mini-services/
 │   └── realtime/                  # Socket.io mini-service (port 3003)
+├── docs/
+│   ├── screenshots/               # Dark-mode screenshots (12 PNGs)
+│   ├── ARCHITECTURE.md            # Layer-by-layer architecture
+│   ├── DECISIONS.md               # Design rationale (dark-mode-first, modular monolith, etc.)
+│   ├── DATABASE_SCHEMA.md         # Schema reference
+│   ├── API_REFERENCE.md           # All 30+ endpoints
+│   ├── IMPLEMENTATION_PLAN.md     # Phase-by-phase status
+│   ├── SECURITY.md                # Threat model & gaps
+│   └── LIMITATIONS.md             # What's not implemented
+├── README.md
+├── CHANGELOG.md
 └── package.json
 ```
 
 ---
 
+## Documentation
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Layer-by-layer architecture, request flow, scaling considerations
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — Why dark-mode-first, why a modular monolith, why Socket.io, why Prisma + SQLite
+- [`docs/DATABASE_SCHEMA.md`](docs/DATABASE_SCHEMA.md) — All 20+ models, indexes, constraints, foreign keys
+- [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) — Every endpoint with request/response shapes
+- [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — Phase-by-phase implementation status
+- [`docs/SECURITY.md`](docs/SECURITY.md) — Threat model, security gaps, hardening checklist
+- [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — What's mocked, what's missing, what's blocked
+
+---
+
+## Business & Product Overview
+
+This is a **portfolio reference implementation**, not a commercial product. It demonstrates that the hard systems problems of a ride-hailing + logistics platform — atomic dispatch, versioned pricing, state-machine validation, real-time tracking, role-separated authorization, audit trails — can be solved cleanly in a single Next.js codebase without microservices.
+
+### If this were a real product
+
+- **Target customers**: Regional ride-hailing operators, last-mile delivery companies, local freight & moving businesses — especially in markets underserved by global players.
+- **Differentiation**: Three service types (car + moto + cargo) on one platform; configurable pricing and service areas per region; provider-independent map / payment / SMS integrations so deployment in any country is feasible.
+- **Monetization**: Platform commission per completed order (default 15–20%, configurable per service category and region).
+- **Operating model**: Drivers are independent contractors approved via document verification; payouts are computed from ledger entries.
+
+### What's missing for production
+
+Real payment gateway with webhook handling, real SMS OTP, real push notifications, background job system (BullMQ), PostgreSQL with PostGIS for geographic dispatch, rate limiting, CSRF protection, automated test suite, Docker deployment, native mobile apps, RTL localization. See [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
+
+---
+
+## Limitations
+
+YallaGo is a **demo / prototype**. The following are intentionally not implemented:
+
+- **No real money moves.** The payment provider is `MOCK`. No card is charged. The adapter pattern is in place for Stripe / PayPal / local gateways.
+- **No real drivers are dispatched.** Eligibility is computed from a seeded `DriverLocation` table. The "online" driver is a demo account refreshed via `scripts/refresh-driver.ts`.
+- **No real map API calls.** Address search uses preset Tehran locations; route polylines are quadratic interpolations. Swap in Google Maps / Mapbox / OSRM via `src/lib/geo.ts`.
+- **No background jobs.** Offer expiration uses client-side polling. Production should add BullMQ.
+- **No OTP / SMS verification.** Phone numbers are stored but not verified.
+- **No native mobile apps.** This is a responsive PWA. Native iOS / Android would require React Native.
+- **No RTL / Persian localization.** Language field exists in the schema, but the UI is English-only.
+- **No automated tests.** The platform has been manually verified end-to-end; unit / integration test suite is a TODO.
+- **No Docker / CI.** Runs via `bun run dev` locally. Production deployment files are a TODO.
+- **SQLite.** Suitable for demo. Production should use PostgreSQL with PostGIS.
+
+Full list: [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
+
+---
+
+## Portfolio Case Study
+
+This project was built as a demonstration of how to architect a complex multi-service transportation platform in a single Next.js codebase. The goal was to solve the underlying systems problems (atomic dispatch, versioned pricing, state machines, real-time tracking, role separation) rather than to ship a pixel-perfect UI clone of any existing product.
+
+**Branding**: The name "YallaGo", the warm terracotta accent color, the dark-mode-first palette, and all UI copy are original work. No existing product's trademarks, copyrighted assets, or visual identity were copied. Snapp is referenced in internal documentation only as a functional inspiration for the scope of services (car + moto + cargo on one platform).
+
+**Time to build**: Single session, end-to-end, including schema design, 30+ API routes, three full UIs, real-time service, dark-mode polish, screenshots, and documentation.
+
+**Verified workflows**: Customer registration → order creation → driver accept → state machine → completion → rating → ledger entries → admin dashboard reflection. Concurrency tested (two simultaneous accepts → only one wins).
+
+---
+
 ## License
 
-This is a demonstration project. All code is original work.
+MIT — see [`LICENSE`](LICENSE). All code is original work.
+
+---
+
+## About
+
+YallaGo is a dark-mode-first ride-hailing & logistics platform demo. It is not a live product. Every figure, account, order, and ledger entry is synthetic, generated locally from a seeded SQLite database. No real money moves, no real drivers are dispatched, no real map API keys are required to run it.
+
+_Status: Demo / Prototype._

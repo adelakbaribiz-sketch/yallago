@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { AdminApi, ServiceApi } from '@/lib/api-client'
 import { useAuth } from '@/components/shared/auth-provider'
+import { ThemeToggle } from '@/components/shared/theme-toggle'
 import { toast } from 'sonner'
 import {
   formatCurrency, formatDateTime, formatDate, ORDER_STATUS_LABELS, SERVICE_TYPE_LABELS,
@@ -35,9 +36,12 @@ export function AdminApp() {
             </div>
             <span className="font-bold">YallaGo Admin</span>
           </div>
-          <div className="text-xs text-right">
-            <div className="font-medium">{user.fullName}</div>
-            <div className="text-muted-foreground">Administrator</div>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <div className="text-xs text-right">
+              <div className="font-medium">{user.fullName}</div>
+              <div className="text-muted-foreground">Administrator</div>
+            </div>
           </div>
         </div>
       </header>

@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import { formatCurrency, formatDateTime, ORDER_STATUS_LABELS, SERVICE_TYPE_LABELS } from '@/lib/format'
 import { useAppStore } from '@/stores/app-store'
 import { getSocket, joinOrderRoom, authenticateSocket } from '@/lib/realtime-client'
+import { ThemeToggle } from '@/components/shared/theme-toggle'
 
 const MapView = dynamic(() => import('@/components/map/MapView'), { ssr: false })
 
@@ -170,6 +171,7 @@ function CustomerHome({
             <Button variant="ghost" size="sm" onClick={onShowHistory}>
               <Clock className="h-4 w-4 mr-1" /> History
             </Button>
+            <ThemeToggle />
             <div className="text-sm hidden sm:block">
               <div className="font-medium">{user.fullName}</div>
               <div className="text-xs text-muted-foreground">{user.email}</div>

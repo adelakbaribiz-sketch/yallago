@@ -2,6 +2,7 @@
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { useTheme } from 'next-themes'
 
 // Fix Leaflet default marker icon paths
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
@@ -78,8 +79,10 @@ export default function MapView({
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
+  const tileLayerRef = useRef<L.TileLayer | null>(null)
   const markersLayerRef = useRef<L.LayerGroup | null>(null)
   const polylineRef = useRef<L.Polyline | null>(null)
+  const { resolvedTheme } = useTheme()
 
   // Init map once
   useEffect(() => {
@@ -89,10 +92,14 @@ export default function MapView({
       zoom,
       zoomControl: true,
     })
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 19,
-    }).addTo(map)
+    const isDark = document.documentElement.classList.contains('dark')
+    const tileUrl = isDark
+      ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+    const attribution = isDark
+      ? '&copy; OpenStreetMap contributors &copy; CARTO'
+      : '&copy; OpenStreetMap contributors'
+    tileLayerRef.current = L.tileLayer(tileUrl, { attribution, maxZoom: 19 }).addTo(map)
     markersLayerRef.current = L.layerGroup().addTo(map)
     mapRef.current = map
 
@@ -102,7 +109,6 @@ export default function MapView({
       })
     }
 
-    // Invalidate size after mount (in case parent layout shifts)
     setTimeout(() => map.invalidateSize(), 100)
 
     return () => {
@@ -111,6 +117,25 @@ export default function MapView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Swap tile layer when theme changes
+  useEffect(() => {
+    if (!mapRef.current) return
+    const isDark = resolvedTheme === 'dark'
+    if (tileLayerRef.current) {
+      tileLayerRef.current.remove()
+    }
+    const tileUrl = isDark
+      ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+    const attribution = isDark
+      ? '&copy; OpenStreetMap contributors &copy; CARTO'
+      : '&copy; OpenStreetMap contributors'
+    tileLayerRef.current = L.tileLayer(tileUrl, { attribution, maxZoom: 19 })
+    tileLayerRef.current.addTo(mapRef.current)
+    // Move tile layer to bottom
+    tileLayerRef.current.bringToBack()
+  }, [resolvedTheme])
 
   // Update center
   useEffect(() => {
